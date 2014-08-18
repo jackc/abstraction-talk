@@ -1,0 +1,329 @@
+The Proper Level of Abstraction
+
+Jack Christensen
+@j3c10
+
+* What do we mean by abstraction?
+
+- abstraction is the process of separating ideas from specific instances of those ideas at work
+
+.link http://en.wikipedia.org/wiki/Abstraction_%28computer_science%29
+
+* What domains can we choose our abstraction level?
+
+- System (SOA, REST, databases)
+- Libraries and frameworks (Sinatra, Rails, Sequel)
+- Language constructs (control flow, data modeling)
+- Language (Assembly, C, Ruby, Clojure)
+
+* Why choose a high level of abstraction?
+
+- Don't repeat yourself (DRY)
+- Do more work with less code
+- Easier to understand intention
+- Easier to change implementation (sometimes)
+
+* Why choose a low level of abstraction?
+
+- Control
+- Performance
+- Easier to understand implementation
+
+* A suggested criteria for judging abstractions:
+
+The proper level of abstraction is that which lets me think about the fewest things at a time.
+
+* Things or Types
+
+- *N* things of the same type are easier to reason about than *N* things of different types.
+- Strive to minimize number of types, then number of things.
+- The best abstractions are those that reduce the number of types and number of things (such C vs assembly).
+- Leaky abstractions increase the number of types.
+- Leaky abstractions *may* still be worthwhile if they reduce the number of things sufficiently.
+
+* Migrations: ActiveRecord DSL vs DDL
+
+ActiveRecord DSL
+
+    def change
+      add_column :products, :part_number, :string
+      add_index :products, :part_number
+    end
+
+DDL
+
+    def up
+      execute <<-SQL
+        alter table products add column part_number varchar;
+        create index products_part_number_idx on products (part_number);
+      SQL
+    end
+
+    def down
+      execute <<-SQL
+        alter table products drop column part_number;
+      SQL
+    end
+
+* Migrations: ActiveRecord DSL vs DDL (cont.)
+
+But if you use a feature ActiveRecord DSL doesn't support?
+
+- Foreign keys
+- Partial indexes
+- Smarter defaults
+- Triggers
+- Views
+
+You need to know DDL.
+
+* JQuery vs native DOM functions
+
+JQuery
+
+    $("#foo").text("bar");
+
+Native
+
+    var el = document.getElementById("foo");
+    el.textContent = "bar";
+
+- JQuery will silently fail if #foo is not found
+- JQuery solves browser incompatibilities
+- Native DOM functions are faster
+- document.querySelectorAll is the JQuery selector (almost)
+
+It still helps to know native DOM functions.
+
+.link http://youmightnotneedjquery.com/
+
+* Exceptions vs. errors
+
+Just let exceptions bubble up. Intention revealing.
+
+    def process_order
+      validate!
+      charge_credit_card
+      generate_shipping_order
+      send_confirmation_email
+    end
+
+But what happens if something goes wrong?
+
+* Exceptions vs. errors (cont.)
+
+But we really need to handle errors.
+
+    def process_order
+      validate!
+      charge_credit_card
+      generate_shipping_order
+      send_confirmation_email
+    rescue ValidationError
+      ...
+    rescue CardProcessorConnectionError
+      ...
+    rescue CardDeclinedError
+      ...
+    rescue ShipperConnectionError
+      ...
+    rescue ConfirmationEmailError
+      ...
+    end
+
+* Exceptions vs. errors (cont.)
+
+    def process_order
+      err = validate
+      if err
+        ...
+      end
+
+      err = charge_credit_card
+      if err == CardProcessorConnectionError
+        ...
+      elsif err == CardDeclinedError
+        ...
+      end
+
+      err = generate_shipping_order
+      if err
+        ...
+      end
+
+      err = send_confirmation_email
+      if err
+        ...
+      end
+    end
+
+* Exceptions vs. errors (cont.)
+
+- Exceptions reveal happy path intention
+- Exceptions obscure error path reality
+- Errors obscure happy path intention
+- Errors reveal error path reality
+
+* ActiveRecord vs SQL
+
+ActiveRecord is great for simple CRUD.
+
+But what about?
+
+- Find with OR, <, >, NOT NULL
+- Finding customers with orders in the last month (subselect (or join and distinct))
+- Finding running totals (window functions)
+- Finding the most recent order(s) per customer (window functions, subselects, distinct on)
+- Full text search
+- Update or delete multiple records at once
+- Find orders without line items (left join)
+
+* ActiveRecord vs SQL (cont.)
+
+Scope chains are great for simple, one table queries.
+
+But what happens when they are complex, multiple table queries?
+
+    class Order < ActiveRecord::Base
+      belongs_to :customer
+      scope :newly_created, -> { where("created_at > ?", 1.week.ago) }
+      scope :by_vip, -> { joins(:customer).where(customers: {vip: true})}
+    end
+
+- Still need to use SQL snippet for newly_created
+- Join singular / where plural -- YUCK!
+- Both scopes work alone, but put them together...
+- Every scope chain has to think about all the other scopes
+
+Need to fall back to entirely to SQL for complex queries or deal with ActiveRecord / ARel contortions
+
+* Traditional Rails vs SQL
+
+Consider a JSON API for an order:
+
+    {
+      "date": "2014-08-21",
+      "total": 342.14,
+      "customer": {
+        name: "John Smith",
+        ...
+      },
+      "line_items": [
+        {
+          "name": "Widget",
+          "price": 99.95,
+          ...
+        },
+        ...
+      ]
+    }
+
+* Traditional Rails vs SQL (cont.)
+
+Rails
+
+- 3 models
+- 1 to 3 serializers (probably 3 because DRY)
+- controller has to know about inside of models / serializers to set up eager load
+- Code that produces response is split over multiple places
+
+SQL
+
+- Complex SQL with subselects and row_to_json
+- All logic in one place
+- Much faster
+
+* Traditional Rails vs SQL (cont.)
+
+SQL example:
+
+    select row_to_json(t)
+    from (
+      select text, pronunciation,
+        (
+          select array_to_json(array_agg(row_to_json(d)))
+          from (
+            select part_of_speech, body
+            from definitions
+            where word_id=words.id
+            order by position asc
+          ) d
+        ) as definitions
+      from words
+      where text = 'autumn'
+
+* Another suggested criteria for judging abstractions:
+
+The proper level of abstraction is that which lets me work the quickest.
+
+- How easily can I find where the *thing* is.
+- How easily can I follow the flow of execution - fewer jumps is better.
+- How easily can I make changes.
+
+* Be careful not to overabstract
+
+- OO can lead to object soup.
+- Good luck finding where the *thing* is or following the flow of execution.
+- See ActiveRecord
+- Many, tiny classes *can* be easier to change, if you can manage to find where to make the change
+
+* DRY code can lead to parched code
+
+  describe "run" do
+    subject { described_class.run(foo, bar)}
+    let(:bar) { f(baz) + g(qux) }
+
+    context "..." do
+      let(:baz) { 86 }
+      let(:qux) { 99 }
+
+      it { ... }
+
+      # Some great number of lines later
+      context "..." do
+        let(:qux) { 13 }
+
+        it { ... }
+      end
+    end
+  end
+
+- No repetition, but very hard to follow and change.
+- Equivalent to relying on subclass to define method
+
+* Duplication is often the lesser evil (especially in tests)
+
+- Less coupling and less jumps
+
+    describe "run" do
+      it "..." do
+        baz = 86
+        quz = 99
+        bar = f(baz) + g(qux)
+
+        result = described_class.run(foo, bar)
+
+        expect(result).to ...
+      end
+
+      it "..." do
+        baz = 86
+        quz = 13
+        bar = f(baz) + g(qux)
+
+        result = described_class.run(foo, bar)
+
+        expect(result).to ...
+      end
+    end
+
+* Summary
+
+- The proper level of abstraction is that which lets me think about the fewest things at a time.
+- Strive to minimize number of types, then number of things.
+- High level abstractions often make the easy easier and the hard harder.
+- Too little abstraction is less painful than too much.
+- Too much abstraction makes it hard to reason about the actual function of a system.
+
+.link https://github.com/jackc/abstraction-talk
+
